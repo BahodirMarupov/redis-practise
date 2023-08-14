@@ -1,11 +1,12 @@
 package com.epam.jmp.redislab.api;
 
 import com.epam.jmp.redislab.utils.RateLimitResponseStats;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.DockerComposeContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -18,7 +19,7 @@ import java.util.HashSet;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@SpringBootTest(webEnvironment =  SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 class FixedWindowRateLimitControllerTest {
 
@@ -45,7 +46,7 @@ class FixedWindowRateLimitControllerTest {
         // We assume that 5 requests will be processed faster than in 1 minute.
         // For fixed window rate limit common rule is to send 2N+1 requests, where N is the max allowed number of requests.
         RateLimitResponseStats stats = this.sendRatelimitRequests(5, requestDescriptor);
-        assertTrue(stats.getTooManyRequestsCount() >= 1 );
+        assertTrue(stats.getTooManyRequestsCount() >= 1);
         assertTrue(stats.getOkCount() >= 2);
     }
 
@@ -54,10 +55,9 @@ class FixedWindowRateLimitControllerTest {
     public void testSpecificAccountIdRuleTakePrecedenceOverGeneric() throws InterruptedException {
         RequestDescriptor requestDescriptor = RequestDescriptor.of(IMPORTANT_CUSTOMER_ID, null, null);
         RateLimitResponseStats stats = this.sendRatelimitRequests(21, requestDescriptor);
-        assertTrue(stats.getTooManyRequestsCount() >= 1 );
+        assertTrue(stats.getTooManyRequestsCount() >= 1);
         assertTrue(stats.getOkCount() >= 10);
     }
-
 
 
     // 2 requests per minute per account Id
@@ -68,7 +68,7 @@ class FixedWindowRateLimitControllerTest {
         RateLimitResponseStats stats = this.sendRatelimitRequests(5,
                 RequestDescriptor.of("2", null, "SLOW"),
                 RequestDescriptor.of("2", null, null)
-                );
+        );
         assertTrue(stats.getTooManyRequestsCount() >= 3);
         assertTrue(stats.getOkCount() <= 2);
     }
@@ -79,16 +79,16 @@ class FixedWindowRateLimitControllerTest {
         RequestDescriptor requestDescriptor = RequestDescriptor.of("3", null, null);
         RateLimitResponseStats stats = this.sendRatelimitRequests(5, requestDescriptor);
         //Checking that requests were blocked
-        assertTrue(stats.getTooManyRequestsCount() >= 1 );
+        assertTrue(stats.getTooManyRequestsCount() >= 1);
         assertTrue(stats.getOkCount() >= 2);
 
         //Waiting one minute to reset request count
-        Thread.sleep(1000);
+        Thread.sleep(60 * 1000);
 
         //Sending maxim allowed number of request
         RateLimitResponseStats statsForNextWindow = this.sendRatelimitRequests(2, requestDescriptor);
         // Checking that no request was blocked
-        assertEquals(2, stats.getOkCount());
+        assertEquals(2, statsForNextWindow.getOkCount());
     }
 
     // 1 request for 192.168.100.150 per HOUR
@@ -96,35 +96,35 @@ class FixedWindowRateLimitControllerTest {
     @Test
     // @Disabled
     public void testPerHourRateLimit() throws InterruptedException {
-        RateLimitResponseStats stats = this.sendRatelimitRequests(3, 60 * 1000,
+        RateLimitResponseStats stats = this.sendRatelimitRequests(3, 1000,
                 RequestDescriptor.of(null, "192.168.100.150", null));
-        assertTrue(stats.getTooManyRequestsCount() >= 1 );
+        assertTrue(stats.getTooManyRequestsCount() >= 1);
         assertTrue(stats.getOkCount() >= 1);
     }
 
-    private RateLimitResponseStats sendRatelimitRequests(int numberOfRequests, RequestDescriptor ... descriptors) throws InterruptedException {
+    private RateLimitResponseStats sendRatelimitRequests(int numberOfRequests, RequestDescriptor... descriptors) throws InterruptedException {
         return this.sendRatelimitRequests(numberOfRequests, 0, descriptors);
     }
 
-    private RateLimitResponseStats sendRatelimitRequests(int numberOfRequests, int delayInMillis, RequestDescriptor ... descriptors) throws InterruptedException {
+    private RateLimitResponseStats sendRatelimitRequests(int numberOfRequests, int delayInMillis, RequestDescriptor... descriptors) throws InterruptedException {
         RateLimitRequest request = new RateLimitRequest(new HashSet<>(Arrays.asList(descriptors)));
         RateLimitResponseStats.Builder statsBuilder = new RateLimitResponseStats.Builder();
         for (int i = 0; i < numberOfRequests; i++) {
-            ResponseEntity<Void> response = restTemplate.postForEntity(this.apiUrl,request,Void.class);
-            if (delayInMillis > 0) {
-                Thread.sleep(delayInMillis);
-            }
-            switch (response.getStatusCode()) {
-                case OK: {
+            try {
+                ResponseEntity<Void> response = restTemplate.postForEntity(this.apiUrl, request, Void.class);
+                if (delayInMillis > 0) {
+                    Thread.sleep(delayInMillis);
+                }
+                if (response.getStatusCode().equals(HttpStatus.OK)) {
                     statsBuilder.add200Request();
-                    continue;
-                }
-                case TOO_MANY_REQUESTS: {
-                    statsBuilder.add429Request();
-                    continue;
-                }
-                default:{
+                } else {
                     fail("Unexpected response code " + response.getStatusCode().value());
+                }
+            } catch (HttpClientErrorException e) {
+                if (e.getStatusCode().equals(HttpStatus.TOO_MANY_REQUESTS)) {
+                    statsBuilder.add429Request();
+                } else {
+                    fail("Unexpected response code " + e.getStatusCode().value());
                 }
             }
         }

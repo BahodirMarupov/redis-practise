@@ -52,4 +52,13 @@ public class RequestDescriptor {
     public int hashCode() {
         return Objects.hash(accountId, clientIp, requestType);
     }
+
+    @Override
+    public String toString() {
+        return "RequestDescriptor{" +
+                "accountId=" + accountId +
+                ", clientIp=" + clientIp +
+                ", requestType=" + requestType +
+                '}';
+    }
 }
